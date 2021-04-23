@@ -35,7 +35,7 @@ class DataLoader(object):
     ''' For data iteration '''
 
     def __init__(
-            self, data_name, data=0, load_dict=True, cuda=True, batch_size=32, shuffle=True, test=False, with_EOS=True, loadNE=True): #data = 0 for train, 1 for valid, 2 for test
+            self, data_name, use_emb=False, data=0, load_dict=True, cuda=True, batch_size=32, shuffle=True, test=False, with_EOS=True, loadNE=True): #data = 0 for train, 1 for valid, 2 for test
         self.options = Options(data_name)
         self.options.batch_size = batch_size
         self._u2idx = {}
@@ -81,7 +81,8 @@ class DataLoader(object):
         if loadNE:
             self._adj_list = self._readNet(self.options.net_data)
             self._adj_dict_list=self._readNet_dict_list(self.options.net_data)
-            self._embeds = self._load_ne(self.options.embed_file,self.options.embed_dim)
+
+        self._embeds = self._load_ne(self.options.embed_file, self.options.embed_dim)
 
         self._need_shuffle = shuffle
 

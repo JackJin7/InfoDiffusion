@@ -29,7 +29,7 @@ def get_previous_user_mask(seq, user_size):
     if seq.is_cuda:
         ans_tmp = ans_tmp.cuda()
     masked_seq = ans_tmp.scatter_(2,masked_seq.long(),float('-inf'))
-    
+
     return masked_seq
 
 def normalize(mx):
@@ -85,6 +85,7 @@ class RNNModel(nn.Module):
     def __init__(self, rnn_type, attention, opt, dropout=0.1, tie_weights=False):
         super(RNNModel, self).__init__()
         self.attention = attention
+        self.opt = opt
         ntoken = opt.user_size
         ninp = opt.d_word_vec
         nhid = opt.d_inner_hid
@@ -107,6 +108,8 @@ class RNNModel(nn.Module):
             self.mem_size = 3
         # end network part
 
+        self.net_emb=torch.from_numpy(opt.embeds).float().cuda()
+
         self.drop = nn.Dropout(dropout)
         self.encoder = nn.Embedding(ntoken, ninp)
         # positional embedding
@@ -114,16 +117,22 @@ class RNNModel(nn.Module):
         if self.pos_emb:
             self.pos_dim = 8
             self.pos_embedding = nn.Embedding(1000, self.pos_dim)
-        
+
         if self.pos_emb:
             self.rnn = getattr(nn, rnn_type)(ninp+self.pos_dim, nhid)
         else:
             self.rnn = getattr(nn, rnn_type)(ninp, nhid)
-        
+
         if opt.network:
-            self.decoder = nn.Linear(nhid+nhid+nhid, ntoken)#
+            if opt.attention:
+                self.decoder = nn.Linear(nhid + nhid + nhid, ntoken)#
+            else:
+                self.decoder = nn.Linear(nhid + nhid, ntoken)
         else:
-            self.decoder = nn.Linear(nhid+nhid, ntoken)
+            if opt.attention:
+                self.decoder = nn.Linear(nhid + nhid, ntoken)
+            else:
+                self.decoder = nn.Linear(nhid, ntoken)
 
         # Optionally tie weights as in:
         # "Using the Output Embedding to Improve Language Models" (Press & Wolf 2016)
@@ -167,7 +176,7 @@ class RNNModel(nn.Module):
         if self.use_network:
             nb1 = self.neighbor_sampling(input.data.cpu().numpy().reshape(-1), self.nnl1) #(batch*len)*nnl1
             nb2 = self.neighbor_sampling(nb1.reshape(-1), self.nnl2) #(batch*l en*nnl1)*nnl2
-            
+
             nf2 = nn.functional.relu(self.gcn2(self.net_emb[nb2,:]).mean(dim=1).view(-1,self.nnl1,self.nhid)) #(batch*len)*nnl1*nhid
             nf1 = nn.functional.relu(self.gcn1(nf2).mean(dim=1).view(input.size(0),input.size(1),self.nhid))
 
@@ -178,15 +187,27 @@ class RNNModel(nn.Module):
             net_emb = net_emb.mean(dim=1).contiguous().view(input.size(0),input.size(1),self.nhid)
 
         # embedding
-        emb = self.drop(self.encoder(input)) # without network
+        # emb = self.drop(self.encoder(input)) # without network
         #emb = self.drop(torch.cat([self.encoder(input),nf1],dim=2))
+
+        if self.opt.use_emb:
+            emb = self.net_emb[input]
+        else:
+            emb = self.drop(self.encoder(input))
 
         batch_size = input.size(0)
         max_len = input.size(1)
         if self.use_network:
-            outputs = Variable(torch.zeros(max_len, batch_size, self.nhid+self.nhid+self.nhid)).cuda()#
+            if self.opt.attention:
+                outputs = Variable(torch.zeros(max_len, batch_size, self.nhid+self.nhid+self.nhid)).cuda()#
+            else:
+                outputs = Variable(torch.zeros(max_len, batch_size, self.nhid + self.nhid)).cuda()
         else:
-            outputs = Variable(torch.zeros(max_len, batch_size, self.nhid+self.nhid)).cuda()
+            if self.opt.attention:
+                outputs = Variable(torch.zeros(max_len, batch_size, self.nhid+self.nhid)).cuda()
+            else:
+                outputs = Variable(torch.zeros(max_len, batch_size, self.nhid)).cuda()
+
         hidden = Variable(torch.zeros(batch_size, self.nhid)).cuda()
         hiddens = None
         #hidden_c = Variable(torch.zeros(batch_size, self.nhid)).cuda()
@@ -202,19 +223,26 @@ class RNNModel(nn.Module):
             else:
                 hiddens = torch.cat([hiddens, hidden], dim=0)
 
-            temp_hiddens = hiddens.view(-1, hidden.shape[0], hidden.shape[1])
-            a = self.attention(hidden, temp_hiddens).unsqueeze(1) # b*1*len  hiddens[:t+1] = len*b*h
-            new_hiddens = temp_hiddens.transpose(0, 1).contiguous()
-            c = torch.bmm(a, new_hiddens).squeeze(1)  # b*1*h
-            c = self.drop(c)
+            if self.opt.attention:
+                temp_hiddens = hiddens.view(-1, hidden.shape[0], hidden.shape[1])
+                a = self.attention(hidden, temp_hiddens).unsqueeze(1) # b*1*len  hiddens[:t+1] = len*b*h
+                new_hiddens = temp_hiddens.transpose(0, 1).contiguous()
+                c = torch.bmm(a, new_hiddens).squeeze(1)  # b*1*h
+                c = self.drop(c)
             # new_c = torch.squeeze(c, 1)
 
             #LSTM
             #hidden, hidden_c = self.rnn(torch.cat([emb[:,t,:],self.pos_embedding(torch.ones(batch_size).long().cuda()*t)],dim=1), (hidden,hidden_c))
             if self.use_network:
-                outputs[t] = torch.cat([hidden, c, net_emb[:,t,:]], dim=1)#nf1[:,t,:]
+                if self.opt.attention:
+                    outputs[t] = torch.cat([hidden, c, net_emb[:,t,:]], dim=1)#nf1[:,t,:]
+                else:
+                    outputs[t] = torch.cat([hidden, net_emb[:,t,:]], dim=1)#nf1[:,t,:]
             else:
-                outputs[t] = torch.cat([hidden, c], dim=1)
+                if self.opt.attention:
+                    outputs[t] = torch.cat([hidden, c], dim=1)
+                else:
+                    outputs[t] = hidden
             # outputs.sum().backward(retain_graph=True)
 
         outputs = outputs.transpose(0,1).contiguous()#b*l*v
@@ -241,7 +269,7 @@ class RRModel(nn.Module):
         outputs_id = Variable(torch.zeros(batch_size, max_len)).cuda() # with start ids
         if self.rnn_model.use_network:
             nfs = Variable(torch.zeros(batch_size, max_len, self.rnn_model.nhid)).cuda()
-        
+
         emb = self.rnn_model.drop(self.rnn_model.encoder(input)) # without network
         hidden = Variable(torch.zeros(batch_size, self.rnn_model.nhid)).cuda()
 
@@ -251,7 +279,7 @@ class RRModel(nn.Module):
                 # net emb
                 if self.rnn_model.use_network:
                     nb1 = self.rnn_model.neighbor_sampling(input[:,t].data.cpu().numpy().reshape(-1), self.rnn_model.nnl1) #(batch*1)*nnl1
-                    nb2 = self.rnn_model.neighbor_sampling(nb1.reshape(-1), self.rnn_model.nnl2) #(batch*len*nnl1)*nnl2        
+                    nb2 = self.rnn_model.neighbor_sampling(nb1.reshape(-1), self.rnn_model.nnl2) #(batch*len*nnl1)*nnl2
                     nf2 = nn.functional.relu(self.rnn_model.gcn2(self.rnn_model.net_emb[nb2,:]).mean(dim=1).view(-1,self.rnn_model.nnl1,self.rnn_model.nhid)) #(batch*len)*nnl1*nhid
                     nf1 = nn.functional.relu(self.rnn_model.gcn1(nf2).mean(dim=1).view(input.size(0),self.rnn_model.nhid))
                     nfs[:,t,:] = nf1
@@ -268,7 +296,7 @@ class RRModel(nn.Module):
             # net emb
             if self.rnn_model.use_network:
                 nb1 = self.rnn_model.neighbor_sampling(outputs_id[:,t-1].long().cpu().numpy(), self.rnn_model.nnl1) #(batch*1)*nnl1
-                nb2 = self.rnn_model.neighbor_sampling(nb1.reshape(-1), self.rnn_model.nnl2) #(batch*len*nnl1)*nnl2    
+                nb2 = self.rnn_model.neighbor_sampling(nb1.reshape(-1), self.rnn_model.nnl2) #(batch*len*nnl1)*nnl2
                 nf2 = nn.functional.relu(self.rnn_model.gcn2(self.rnn_model.net_emb[nb2,:]).mean(dim=1).view(-1,self.rnn_model.nnl1,self.rnn_model.nhid)) #(batch*len)*nnl1*nhid
                 nf1 = nn.functional.relu(self.rnn_model.gcn1(nf2).mean(dim=1).view(input.size(0),self.rnn_model.nhid))
                 nfs[:,t,:] = nf1

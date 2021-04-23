@@ -19,7 +19,7 @@ from Optim import ScheduledOptim
 from DataLoader import DataLoader
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "4"
+os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
 def get_performance(crit, pred, gold, smoothing=False, num_class=None):
     ''' Apply label smoothing if needed '''
@@ -309,9 +309,23 @@ def main():
     parser.add_argument('-notes', default='')
     parser.add_argument('-data_name', default='twitter')
 
+    parser.add_argument('-use_emb', type=int, default=0)
+    parser.add_argument('-attention', type=int, default=0)
+
     opt = parser.parse_args()
     opt.cuda = not opt.no_cuda
     opt.d_word_vec = opt.d_model
+
+    if opt.use_emb == 1:
+        opt.use_emb = True
+    else:
+        opt.use_emb = False
+
+    if opt.attention == 1:
+        opt.attention = True
+    else:
+        opt.attention = False
+
     if opt.network==1:
         opt.network = True
     else:
@@ -335,6 +349,8 @@ def main():
         opt.net = train_data._adj_list
         opt.net_dict = train_data._adj_dict_list
         opt.embeds = train_data._embeds
+
+    opt.embeds = train_data._embeds
 
     #========= Preparing Model =========#
     #print(opt)
