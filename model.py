@@ -218,12 +218,13 @@ class RNNModel(nn.Module):
             else:
                 hidden = self.rnn(emb[:,t,:], hidden)
 
-            if hiddens is None:
-                hiddens = hidden
-            else:
-                hiddens = torch.cat([hiddens, hidden], dim=0)
-
             if self.opt.attention:
+
+                if hiddens is None:
+                    hiddens = hidden
+                else:
+                    hiddens = torch.cat([hiddens, hidden], dim=0)
+
                 temp_hiddens = hiddens.view(-1, hidden.shape[0], hidden.shape[1])
                 a = self.attention(hidden, temp_hiddens).unsqueeze(1) # b*1*len  hiddens[:t+1] = len*b*h
                 new_hiddens = temp_hiddens.transpose(0, 1).contiguous()

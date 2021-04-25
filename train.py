@@ -19,7 +19,6 @@ from Optim import ScheduledOptim
 from DataLoader import DataLoader
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 
 def get_performance(crit, pred, gold, smoothing=False, num_class=None):
     ''' Apply label smoothing if needed '''
@@ -302,6 +301,7 @@ def main():
     parser.add_argument('-save_mode', type=str, choices=['all', 'best'], default='best')
 
     parser.add_argument('-no_cuda', action='store_true')
+    parser.add_argument('-gpu', type=str, default='0')
 
     parser.add_argument('-network', type=int, default=0) # use social network; need features or deepwalk embeddings as initial input
     parser.add_argument('-pos_emb', type=int, default=1)
@@ -314,6 +314,9 @@ def main():
 
     opt = parser.parse_args()
     opt.cuda = not opt.no_cuda
+
+    os.environ["CUDA_VISIBLE_DEVICES"] = opt.gpu
+
     opt.d_word_vec = opt.d_model
 
     if opt.use_emb == 1:
