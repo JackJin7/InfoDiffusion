@@ -82,7 +82,8 @@ class DataLoader(object):
             self._adj_list = self._readNet(self.options.net_data)
             self._adj_dict_list=self._readNet_dict_list(self.options.net_data)
 
-        self._embeds = self._load_ne(self.options.embed_file, self.options.embed_dim)
+        if use_emb:
+            self._embeds = self._load_ne(self.options.embed_file, self.options.embed_dim)
 
         self._need_shuffle = shuffle
 

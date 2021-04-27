@@ -251,21 +251,23 @@ def train(model, training_data, validation_data, test_data, crit, optimizer, opt
 
         # if epoch_i>=opt.warmup-1 or epoch_i % 5==4:
         # test
+        start = time.time()
         scores, reward_test = test_epoch(model, test_data)
-        print('  - (Test) ')
+        print('  - (Test) elapse: {elapse:3.3f} min'.format(elapse=(time.time() - start) / 60))
+
         for metric in scores.keys():
             print(metric+' '+str(scores[metric]))
         # print('reward '+str(reward_test)+'\n')
 
-        if opt.save_model:
-            if opt.save_mode == 'all':
-                model_name = opt.save_model + '_accu_{accu:3.3f}.chkpt'.format(accu=100*valid_accu)
-                torch.save(checkpoint, model_name)
-            elif opt.save_mode == 'best':
-                model_name = opt.save_model + '.chkpt'
-                if valid_accu >= max(valid_accus):
-                    torch.save(checkpoint, model_name)
-                    print('    - [Info] The checkpoint file has been updated.')
+        # if opt.save_model:
+        #     if opt.save_mode == 'all':
+        #         model_name = opt.save_model + '_accu_{accu:3.3f}.chkpt'.format(accu=100*valid_accu)
+        #         torch.save(checkpoint, model_name)
+        #     elif opt.save_mode == 'best':
+        #         model_name = opt.save_model + '.chkpt'
+        #         if valid_accu >= max(valid_accus):
+        #             torch.save(checkpoint, model_name)
+        #             print('    - [Info] The checkpoint file has been updated.')
 
         if log_train_file and log_valid_file:
             with open(log_train_file, 'a') as log_tf, open(log_valid_file, 'a') as log_vf:
@@ -311,6 +313,7 @@ def main():
 
     parser.add_argument('-use_emb', type=int, default=0)
     parser.add_argument('-attention', type=int, default=0)
+    parser.add_argument('-w_decay', type=float, default=0.0)
 
     opt = parser.parse_args()
     opt.cuda = not opt.no_cuda
@@ -343,9 +346,9 @@ def main():
     
 
     #========= Preparing DataLoader =========#
-    train_data = DataLoader(opt.data_name, data=0, load_dict=True, batch_size=opt.batch_size, cuda=opt.cuda, loadNE=opt.network)
-    valid_data = DataLoader(opt.data_name, data=1, batch_size=opt.batch_size, cuda=opt.cuda, loadNE=opt.network)
-    test_data = DataLoader(opt.data_name, data=2, batch_size=opt.batch_size, cuda=opt.cuda, loadNE=opt.network)
+    train_data = DataLoader(opt.data_name, use_emb=opt.use_emb, data=0, load_dict=True, batch_size=opt.batch_size, cuda=opt.cuda, loadNE=opt.network)
+    valid_data = DataLoader(opt.data_name, use_emb=opt.use_emb, data=1, batch_size=opt.batch_size, cuda=opt.cuda, loadNE=opt.network)
+    test_data = DataLoader(opt.data_name, use_emb=opt.use_emb, data=2, batch_size=opt.batch_size, cuda=opt.cuda, loadNE=opt.network)
 
     opt.user_size = train_data.user_size
     if opt.network:
@@ -353,7 +356,8 @@ def main():
         opt.net_dict = train_data._adj_dict_list
         opt.embeds = train_data._embeds
 
-    opt.embeds = train_data._embeds
+    if opt.use_emb:
+        opt.embeds = train_data._embeds
 
     #========= Preparing Model =========#
     #print(opt)
@@ -366,7 +370,7 @@ def main():
     optimizer = ScheduledOptim(
         optim.Adam(
             RLLearner.parameters(),
-            betas=(0.9, 0.98), eps=1e-09),
+            betas=(0.9, 0.98), eps=1e-09, weight_decay=opt.w_decay),
         opt.d_model, opt.n_warmup_steps)
 
 

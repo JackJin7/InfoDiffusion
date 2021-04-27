@@ -108,7 +108,8 @@ class RNNModel(nn.Module):
             self.mem_size = 3
         # end network part
 
-        self.net_emb=torch.from_numpy(opt.embeds).float().cuda()
+        if opt.use_emb:
+            self.net_emb=torch.from_numpy(opt.embeds).float().cuda()
 
         self.drop = nn.Dropout(dropout)
         self.encoder = nn.Embedding(ntoken, ninp)
@@ -229,7 +230,7 @@ class RNNModel(nn.Module):
                 a = self.attention(hidden, temp_hiddens).unsqueeze(1) # b*1*len  hiddens[:t+1] = len*b*h
                 new_hiddens = temp_hiddens.transpose(0, 1).contiguous()
                 c = torch.bmm(a, new_hiddens).squeeze(1)  # b*1*h
-                c = self.drop(c)
+                # c = self.drop(c)
             # new_c = torch.squeeze(c, 1)
 
             #LSTM
