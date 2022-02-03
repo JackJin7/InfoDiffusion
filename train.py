@@ -251,12 +251,13 @@ def train(model, training_data, validation_data, test_data, crit, optimizer, opt
 
         # if epoch_i>=opt.warmup-1 or epoch_i % 5==4:
         # test
-        start = time.time()
-        scores, reward_test = test_epoch(model, test_data)
-        print('  - (Test) elapse: {elapse:3.3f} min'.format(elapse=(time.time() - start) / 60))
+        if epoch_i % 5 == 4:
+            start = time.time()
+            scores, reward_test = test_epoch(model, test_data)
+            print('  - (Test) elapse: {elapse:3.3f} min'.format(elapse=(time.time() - start) / 60))
 
-        for metric in scores.keys():
-            print(metric+' '+str(scores[metric]))
+            for metric in scores.keys():
+                print(metric+' '+str(scores[metric]))
         # print('reward '+str(reward_test)+'\n')
 
         # if opt.save_model:
@@ -306,13 +307,14 @@ def main():
     parser.add_argument('-gpu', type=str, default='0')
 
     parser.add_argument('-network', type=int, default=0) # use social network; need features or deepwalk embeddings as initial input
-    parser.add_argument('-pos_emb', type=int, default=1)
+    parser.add_argument('-pos_emb', type=int, default=0)
     parser.add_argument('-warmup', type=int, default=10) # warmup epochs
     parser.add_argument('-notes', default='')
     parser.add_argument('-data_name', default='twitter')
 
     parser.add_argument('-use_emb', type=int, default=0)
     parser.add_argument('-attention', type=int, default=0)
+    parser.add_argument('-use_conv', type=int, default=0)
     parser.add_argument('-w_decay', type=float, default=0.0)
 
     opt = parser.parse_args()
@@ -327,10 +329,10 @@ def main():
     else:
         opt.use_emb = False
 
-    if opt.attention == 1:
-        opt.attention = True
-    else:
-        opt.attention = False
+    # if opt.attention == 1:
+    #     opt.attention = True
+    # else:
+    #     opt.attention = False
 
     if opt.network==1:
         opt.network = True
@@ -370,7 +372,7 @@ def main():
     optimizer = ScheduledOptim(
         optim.Adam(
             RLLearner.parameters(),
-            betas=(0.9, 0.98), eps=1e-09, weight_decay=opt.w_decay),
+            betas=(0.9, 0.98), eps=1e-09),
         opt.d_model, opt.n_warmup_steps)
 
 

@@ -55,9 +55,9 @@ class DataLoader(object):
             with open(self.options.idx2u_dict, 'rb') as handle:
                 self._idx2u = pickle.load(handle)
             self.user_size = len(self._u2idx)
-        self._train_cascades,train_len = self._readFromFile(self.options.train_data)
-        self._valid_cascades,valid_len = self._readFromFile(self.options.valid_data)
-        self._test_cascades,test_len = self._readFromFile(self.options.test_data)
+        self._train_cascades,train_len, min_len1, max_len1 = self._readFromFile(self.options.train_data)
+        self._valid_cascades,valid_len, min_len2, max_len2 = self._readFromFile(self.options.valid_data)
+        self._test_cascades,test_len, min_len3, max_len3 = self._readFromFile(self.options.test_data)
         self.train_size = len(self._train_cascades)
         self.valid_size = len(self._valid_cascades)
         self.test_size = len(self._test_cascades)
@@ -65,6 +65,8 @@ class DataLoader(object):
         print(self.train_size+self.valid_size+self.test_size)
         print((train_len+valid_len+test_len+0.0)/(self.train_size+self.valid_size+self.test_size))
         print(self.user_size-2)
+        print(min(min_len1, min_len2, min_len3), max(max_len1, max_len2, max_len3))
+
         self.cuda = cuda
         #self.test = test
         if self.data == 0:
@@ -81,6 +83,7 @@ class DataLoader(object):
         if loadNE:
             self._adj_list = self._readNet(self.options.net_data)
             self._adj_dict_list=self._readNet_dict_list(self.options.net_data)
+            self._embeds = self._load_ne(self.options.embed_file, self.options.embed_dim)
 
         if use_emb:
             self._embeds = self._load_ne(self.options.embed_file, self.options.embed_dim)
@@ -202,6 +205,8 @@ class DataLoader(object):
         """read all cascade from training or testing files. """
         total_len = 0
         t_cascades = []
+        max_len = 0
+        min_len = 99999
         for line in open(filename):
             if len(line.strip()) == 0:
                 continue
@@ -217,10 +222,14 @@ class DataLoader(object):
 
             if len(userlist) > 1 and len(userlist)<=500:
                 total_len+=len(userlist)
+                if len(userlist) > max_len:
+                    max_len = len(userlist)
+                if len(userlist) < min_len:
+                    min_len = len(userlist)
                 if self.with_EOS:
                     userlist.append(Constants.EOS)
                 t_cascades.append(userlist)
-        return t_cascades,total_len
+        return t_cascades,total_len, min_len, max_len
 
     def __iter__(self):
         return self

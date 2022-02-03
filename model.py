@@ -54,29 +54,49 @@ def sparse_mx_to_torch_sparse_tensor(sparse_mx):
 class Attention(nn.Module):
     def __init__(self, opt):  # enc_hid_dim = opt.d_inner_hid
         super().__init__()
-        self.attn = nn.Linear(2*opt.d_inner_hid, opt.d_inner_hid, bias=False)
-        self.v = nn.Linear(opt.d_inner_hid, 1, bias=False)
+        self.opt = opt
+        if opt.attention == 1:
+            self.attn = nn.Linear(2*opt.d_inner_hid, opt.d_inner_hid, bias=False)
+            self.v = nn.Linear(opt.d_inner_hid, 1, bias=False)
+        elif opt.attention == 2:
+            self.attn = nn.MultiheadAttention(opt.d_inner_hid, 1)
 
-    def forward(self, s, enc_output):
-        # s = [batch_size, dec_hid_dim]
-        # enc_output = [src_len, batch_size, enc_hid_dim * 2]
+    def forward(self, s, enc_output, attn_mask=None):
 
-        batch_size = enc_output.shape[1]
-        src_len = enc_output.shape[0]
+        # s = [len, b, h]
+        # enc_output = [len, b, h]
+        if self.opt.attention == 1:  # Luong Attention
+            batch_size = enc_output.shape[1]
+            src_len = enc_output.shape[0]
 
-        # repeat decoder hidden state src_len times
-        # s = [batch_size, src_len, dec_hid_dim]
-        # enc_output = [batch_size, src_len, enc_hid_dim * 2]
-        s = s.unsqueeze(1).repeat(1, src_len, 1)
-        new_enc_output = enc_output.transpose(0, 1)
+            # repeat decoder hidden state src_len times
 
-        # energy = [batch_size, src_len, dec_hid_dim]
-        energy = torch.tanh(self.attn(torch.cat((s, new_enc_output), dim=2)))
+            s = enc_output.unsqueeze(2).repeat(1, 1, src_len, 1)  # [len, b, len, h]
+            new_enc_output = enc_output.transpose(0, 1).unsqueeze(0).repeat(src_len, 1, 1, 1)  # [len, b, len, h]
 
-        # attention = [batch_size, src_len]
-        attention = self.v(energy).squeeze(2)
+            energy = torch.tanh(self.attn(torch.cat((s, new_enc_output), dim=3)))  # [len, b, len, h]
 
-        return torch.softmax(attention, dim=1)
+            attention = self.v(energy).squeeze(3)  # [len, b, len]
+
+            attention = attention.permute(1, 0, 2)  # [b, len, len]
+
+            # s = s.unsqueeze(1).repeat(1, src_len, 1)
+            # new_enc_output = enc_output.transpose(0, 1)
+            #
+            # # energy = [b, l, h]
+            # energy = torch.tanh(self.attn(torch.cat((s, new_enc_output), dim=2)))
+            #
+            # # attention = [b, l]
+            # attention = self.v(energy).squeeze(2)
+            if attn_mask is not None:
+                attention = attention + attn_mask
+
+            return torch.softmax(attention, dim=2)
+
+        elif self.opt.attention == 2:  # multi-head attention
+            _, attention = self.attn(enc_output, enc_output, enc_output, attn_mask=attn_mask)
+
+            return attention
 
 
 class RNNModel(nn.Module):
@@ -98,7 +118,8 @@ class RNNModel(nn.Module):
                             dtype=np.float32)
             adj = normalize(adj)
             self.adj = sparse_mx_to_torch_sparse_tensor(adj)
-            self.adj = self.adj.cuda()
+            # self.adj = adj.toarray()
+            # self.adj = torch.tensor(self.adj).cuda()
             self.adj_list = opt.net_dict
             self.net_emb=torch.from_numpy(opt.embeds).float().cuda()
             self.nnl1 = 25
@@ -131,7 +152,10 @@ class RNNModel(nn.Module):
                 self.decoder = nn.Linear(nhid + nhid, ntoken)
         else:
             if opt.attention:
-                self.decoder = nn.Linear(nhid + nhid, ntoken)
+                if opt.use_conv:
+                    self.decoder = nn.Conv1d(nhid + nhid, ntoken, opt.use_conv, padding=opt.use_conv - 1)
+                else:
+                    self.decoder = nn.Linear(nhid, nhid)
             else:
                 self.decoder = nn.Linear(nhid, ntoken)
 
@@ -202,14 +226,15 @@ class RNNModel(nn.Module):
             if self.opt.attention:
                 outputs = Variable(torch.zeros(max_len, batch_size, self.nhid+self.nhid+self.nhid)).cuda()#
             else:
-                outputs = Variable(torch.zeros(max_len, batch_size, self.nhid + self.nhid)).cuda()
+                outputs = Variable(torch.zeros(max_len, batch_size, self.nhid)).cuda()
         else:
             if self.opt.attention:
-                outputs = Variable(torch.zeros(max_len, batch_size, self.nhid+self.nhid)).cuda()
+                outputs = Variable(torch.zeros(max_len, batch_size, self.nhid)).cuda()
             else:
                 outputs = Variable(torch.zeros(max_len, batch_size, self.nhid)).cuda()
 
         hidden = Variable(torch.zeros(batch_size, self.nhid)).cuda()
+        # hiddens = Variable(torch.zeros(max_len, batch_size, self.nhid)).cuda()
         hiddens = None
         #hidden_c = Variable(torch.zeros(batch_size, self.nhid)).cuda()
         for t in range(0, max_len):
@@ -219,40 +244,75 @@ class RNNModel(nn.Module):
             else:
                 hidden = self.rnn(emb[:,t,:], hidden)
 
-            if self.opt.attention:
-
-                if hiddens is None:
-                    hiddens = hidden
-                else:
-                    hiddens = torch.cat([hiddens, hidden], dim=0)
-
-                temp_hiddens = hiddens.view(-1, hidden.shape[0], hidden.shape[1])
-                a = self.attention(hidden, temp_hiddens).unsqueeze(1) # b*1*len  hiddens[:t+1] = len*b*h
-                new_hiddens = temp_hiddens.transpose(0, 1).contiguous()
-                c = torch.bmm(a, new_hiddens).squeeze(1)  # b*1*h
-                # c = self.drop(c)
-            # new_c = torch.squeeze(c, 1)
+            # if self.opt.attention:
+            #
+            #     if hiddens is None:
+            #         hiddens = hidden
+            #     else:
+            #         hiddens = torch.cat([hiddens, hidden], dim=0)  # [len*b, h]
+            #     # hiddens[t] = hidden
+            #
+            #     temp_hiddens = hiddens.view(-1, hidden.shape[0], hidden.shape[1])  # [len, b, h]
+            #     # temp_hiddens = hiddens[:t].clone()
+            #     a = self.attention(hidden, temp_hiddens).unsqueeze(1)  # [b, 1, len]
+            #     new_hiddens = temp_hiddens.transpose(0, 1).contiguous()  # [b, len, h]
+            #     c = torch.bmm(a, new_hiddens).squeeze(1)  # [b, 1, h]
+            #     # c = self.drop(c)
+            # # new_c = torch.squeeze(c, 1)
 
             #LSTM
             #hidden, hidden_c = self.rnn(torch.cat([emb[:,t,:],self.pos_embedding(torch.ones(batch_size).long().cuda()*t)],dim=1), (hidden,hidden_c))
             if self.use_network:
-                if self.opt.attention:
-                    outputs[t] = torch.cat([hidden, c, net_emb[:,t,:]], dim=1)#nf1[:,t,:]
-                else:
-                    outputs[t] = torch.cat([hidden, net_emb[:,t,:]], dim=1)#nf1[:,t,:]
+                outputs[t] = hidden + net_emb[:,t,:]
+                # outputs[t] = torch.cat([hidden, net_emb[:,t,:]], dim=1)#nf1[:,t,:]
+                #
+                # if self.opt.attention:
+                #     outputs[t] = torch.cat([hidden, c, net_emb[:,t,:]], dim=1)#nf1[:,t,:]
+                # else:
+                #     outputs[t] = torch.cat([hidden, net_emb[:,t,:]], dim=1)#nf1[:,t,:]
             else:
-                if self.opt.attention:
-                    outputs[t] = torch.cat([hidden, c], dim=1)
-                else:
-                    outputs[t] = hidden
+                outputs[t] = hidden
+
+                # if self.opt.attention:
+                #     # outputs[t] = torch.cat([hidden, c], dim=1)
+                #     outputs[t] = hidden + c
+                # else:
+                #     outputs[t] = hidden
             # outputs.sum().backward(retain_graph=True)
 
-        outputs = outputs.transpose(0,1).contiguous()#b*l*v
-        outputs = self.drop(outputs)
-        decoded = self.decoder(outputs.view(outputs.size(0)*outputs.size(1), outputs.size(2)))
-        result = decoded.view(outputs.size(0), outputs.size(1), decoded.size(1)) + torch.autograd.Variable(get_previous_user_mask(input, self.user_size),requires_grad=False)
+        # outputs = outputs.transpose(0,1).contiguous()  # [b, len, h]
+        # outputs = self.drop(outputs)
+
+        if self.opt.attention:
+            attn_mask = (torch.triu(torch.ones(outputs.shape[0], outputs.shape[0])) == 1).transpose(0, 1)
+            attn_mask = attn_mask.float().masked_fill(attn_mask == 0, float('-inf')).masked_fill(attn_mask == 1, float(0.0))
+            a = self.attention(outputs, outputs, attn_mask=attn_mask.cuda())  # [b, len, len]
+            outputs = outputs.transpose(0, 1).contiguous()  # [b, len, h]
+            c = torch.bmm(a, outputs)  # [b, len, h]
+            outputs = outputs + c  # [b, len, h]
+        else:
+            outputs = outputs.transpose(0, 1).contiguous()  # [b, len, h]
+
+
+        decoded = self.decoder(outputs.view(outputs.size(0)*outputs.size(1), outputs.size(2)))  # [b*len, h]
+        decoded = decoded.view(outputs.size(0), outputs.size(1), decoded.size(1))  # [b, len, h]
+
+        all_embd = self.encoder(torch.LongTensor(np.arange(self.user_size)).cuda()).permute(1, 0)  # [h, n]
+        decoded = torch.matmul(outputs, all_embd)  # [b, len, n]
+
+
+        # if self.opt.use_conv:
+        #     decoded = outputs.permute(0, 2, 1)  # [b, 2*h, len]
+        #     decoded = self.decoder(decoded)  # [b, token, len]
+        #     decoded = decoded[:, :, :-self.opt.use_conv+1].permute(0, 2, 1).contiguous()  # [b, len, token]
+        # else:
+        #     all_embd = self.encoder(torch.LongTensor(np.arange(self.user_size)).cuda()).permute(1, 0)  # [h, n]
+        #     decoded = torch.matmul(outputs, all_embd)  # [b, len, n]
+        #     # decoded = self.decoder(outputs.view(outputs.size(0)*outputs.size(1), outputs.size(2)))  # [b*len, token]
+        #     # decoded = decoded.view(outputs.size(0), outputs.size(1), decoded.size(1))  # [b, len, token]
+        result = decoded + torch.autograd.Variable(get_previous_user_mask(input, self.user_size),requires_grad=False)
         #print(result.size())
-        return result.view(-1,decoded.size(1)), hidden
+        return result.view(-1, decoded.size(2)), hidden
 
 class RRModel(nn.Module):
     """Container module with an encoder, a recurrent module, and a decoder."""
